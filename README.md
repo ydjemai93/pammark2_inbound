@@ -1,35 +1,32 @@
-# pam_markII (Python Edition)
+# pam_markII
 
-This repo demonstrates a Python server that integrates:
-- **Twilio Voice & Media Streams** (for telephony),
-- **OpenAI Realtime API** (model gpt-4o),
-- STT and TTS in real-time over websockets.
+This application demonstrates how to use Python, [Twilio Voice](https://www.twilio.com/docs/voice) and [Media Streams](https://www.twilio.com/docs/voice/media-streams), and [OpenAI's Realtime API](https://platform.openai.com/docs/) to make a phone call to speak with an AI Assistant. 
 
-## Files
-- **main.py** : The core FastAPI application. It:
-  - Exposes `"/incoming-call"` to Twilio, returning TwiML `<Connect><Stream>`.
-  - Manages a WebSocket `"/media-stream"` that bridges audio Twilio <-> OpenAI.
+The application opens websockets with the OpenAI Realtime API and Twilio, and sends voice audio from one to the other to enable a two-way conversation.
 
-- **requirements.txt** : dependencies
+See [the official Twilio docs](https://www.twilio.com/docs/voice) for more details on Voice & Media Streams, and the [OpenAI Realtime docs](https://platform.openai.com/docs) for GPT-4o.
 
-- **.gitignore** : excludes `.env` etc.
+## Prerequisites
 
-## Setup
+- **Python 3.9+** 
+- A Twilio account (with a **Voice** number).
+- An OpenAI account with **Realtime API** access (GPT-4o).
+- `pip install -r requirements.txt`
 
-1. **Python 3.9+** recommended
-2. `pip install -r requirements.txt`
-3. Create a `.env` with `OPENAI_API_KEY=sk-xxxx`
-4. Run local: `python main.py`
-5. Expose via ngrok or deploy to a service (Railway, etc.)
+## Local Setup
 
-## Twilio Configuration
+1. **ngrok** or another tunneling solution to expose local port 5050.
+2. `python main.py`
+3. Twilio -> "A call comes in" -> `https://<ngrok>/incoming-call`
+4. Call your Twilio number, speak, and watch the AI respond in real time.
 
-1. In the [Twilio Console](https://console.twilio.com/), buy a phone number with Voice.
-2. "A Call Comes In" → **Webhook** → `POST` → `https://your-domain/incoming-call`
-3. Test: call your number, the server reads a short greeting, then uses `<Connect><Stream>` to open a WS bridging the audio with OpenAI Realtime.
+## Outbound calls ?
 
-## Additional Info
+Not covered in this MVP, but you can adapt `/incoming-call` or use Twilio's API for outbound, passing the same TwiML. 
 
-- If you see "application error" or timeouts, ensure your TwiML is correct and returned quickly.
-- If you see no "media" events, remove `track="..."` or check inbound/outbound call direction.
-- Check logs for debug messages in each step.
+## Special features
+
+- **Interrupt**: when user speech is detected, we truncate the AI TTS in progress (`conversation.item.truncate`).
+- **Initial greet**: un-comment `await send_initial_conversation_item(openai_ws)` to have the AI speak first.
+
+Enjoy building with **pam_markII**!
