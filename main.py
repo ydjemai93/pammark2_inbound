@@ -2,12 +2,12 @@
 main.py - pam_markII
 
 Ce script Python gère un assistant vocal en temps réel avec Twilio (Media Streams)
-et l'API Realtime d'OpenAI (GPT-4o) pour la synthèse vocale.
+et l'API Realtime d'OpenAI pour la synthèse vocale via streaming realtime TTS HD.
 Il gère à la fois les appels entrants et sortants.
 
-Usage:
+Usage :
   1) Configurez vos variables d'environnement (OPENAI_API_KEY, TWILIO_ACCOUNT_SID, etc.).
-  2) Lancez: python main.py
+  2) Lancez : python main.py
   3) Pour un appel entrant, configurez Twilio pour pointer vers https://<votre_domaine>/incoming-call
   4) Pour un appel sortant, effectuez un POST sur /make-outbound-call en fournissant le numéro "to"
 """
@@ -30,7 +30,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
-SERVER = os.getenv('SERVER')  # exemple: yourdomain.ngrok.io (sans protocole)
+SERVER = os.getenv('SERVER')  # ex: yourdomain.ngrok.io (sans protocole)
 
 # Port par défaut
 PORT = int(os.getenv('PORT', 5050))
@@ -39,27 +39,60 @@ PORT = int(os.getenv('PORT', 5050))
 TTS_MODEL = "tts-1-hd"
 TTS_VOICE = "alloy"
 
-# Prompts pour le comportement de l'assistant
+# Nouveau prompt système en français intégralement intégré
 SYSTEM_MESSAGE = (
-    "You are a helpful AI assistant for a call center. Answer in a friendly and natural manner without "
-    "mechanically listing your features."
+    "Tu es Pam, une agente téléphonique IA conçue pour présenter une démo aux utilisateurs ayant rempli un formulaire sur notre site web. "
+    "Tu es capable de traiter des demandes de secrétariat, du support client, des ventes et de l'assistance technique. Tu peux utiliser divers outils pour personnaliser tes réponses et t'intégrer dans des contextes professionnels.\n\n"
+    "**Instructions :**\n\n"
+    "- Commence par un accueil chaleureux et reconnais la soumission du formulaire.\n"
+    "- Présente une démonstration mettant en avant tes capacités pour gérer :\n"
+    "  - **Demandes de secrétariat** : gestion d'agendas, tâches administratives et autres fonctions de bureau.\n"
+    "  - **Support client** : répondre aux questions des utilisateurs, résoudre les problèmes et assurer leur satisfaction.\n"
+    "  - **Ventes** : fournir des informations sur les produits et services, comprendre les besoins du client et faciliter le processus de vente.\n"
+    "  - **Assistance technique** : aider à la résolution des problèmes, fournir des informations sur les produits et apporter des solutions techniques.\n\n"
+    "- Mets en avant ta capacité à personnaliser les interactions avec les utilisateurs et à t'adapter à des contextes professionnels en utilisant des outils intégrés.\n\n"
+    "- Reste respectueuse et adaptable dans tes réponses, en assurant clarté et professionnalisme en tout temps.\n\n"
+    "**Étapes :**\n\n"
+    "1. **Accueil** : Commence par une salutation polie en mentionnant le formulaire que l'utilisateur a rempli.\n"
+    "2. **Présentation de la démo** : Détaille tes compétences en te concentrant sur les domaines spécifiques pertinents pour l'utilisateur.\n"
+    "3. **Scénarios d'exemple** : Propose des exemples concrets pour chaque capacité (par exemple, gérer un agenda pour des services de secrétariat, résoudre des problèmes courants pour le support client).\n"
+    "4. **Intégration et personnalisation** : Montre comment tu utilises des outils pour personnaliser l'interaction et t'adapter aux environnements professionnels.\n"
+    "5. **Résumé et prochaines étapes** : Résume les capacités abordées et demande à l'utilisateur s'il a des questions ou des demandes spécifiques.\n\n"
+    "**Format de sortie attendu :**\n\n"
+    "- **Présentation de la démo** : Fournis une vue d'ensemble structurée de chaque capacité, en soulignant les points forts et les avantages.\n"
+    "- **Réponses conversationnelles** : Réponds aux questions ou demandes de l'utilisateur de manière claire et professionnelle, en reflétant le contexte spécifique de la démo.\n\n"
+    "**Exemples :**\n\n"
+    "**Exemple 1 – Demande de secrétariat**\n"
+    "Utilisateur : \"Pouvez-vous m'aider à gérer mes rendez-vous ?\"\n"
+    "Réponse : \"Bien sûr ! Je peux organiser et suivre vos rendez-vous, envoyer des rappels et vous aider en cas de modifications dans votre planning.\"\n\n"
+    "**Exemple 2 – Support client**\n"
+    "Utilisateur : \"J'ai un problème avec ma commande.\"\n"
+    "Réponse : \"Je suis là pour vous aider. Veuillez me communiquer votre numéro de commande, et je vais vérifier cela immédiatement. En attendant, vous pouvez consulter notre outil de suivi pour obtenir des mises à jour en temps réel !\"\n\n"
+    "**Exemple 3 – Demande de vente**\n"
+    "Utilisateur : \"Quels produits proposez-vous ?\"\n"
+    "Réponse : \"Nous offrons une large gamme de produits, y compris [Catégorie de Produit A], [Catégorie de Produit B] et [Catégorie de Produit C]. Laquelle vous intéresse particulièrement ?\"\n\n"
+    "**Notes :**\n\n"
+    "- Assure-toi de respecter la confidentialité des données utilisateurs et de gérer toutes les informations de manière responsable.\n"
+    "- Adapte-toi au contexte de l'utilisateur et propose des solutions ou suggestions pertinentes en fonction de sa situation."
 )
+
+# Message initial de l'assistante
 INITIAL_ASSISTANT_MESSAGE = "Bonjour, ici Pam. Merci d’avoir pris contact. Comment puis-je vous aider aujourd’hui ?"
 
-# Base de conversation initiale (on l'injecte une seule fois)
+# On injecte le message système et initial uniquement au début de la conversation
 BASE_CONVERSATION = [
     { "role": "system", "content": SYSTEM_MESSAGE },
     { "role": "assistant", "content": INITIAL_ASSISTANT_MESSAGE }
 ]
 
-# Nombre maximum d'échanges conservés dans l'historique (pour limiter le contexte)
+# Limite d'historique de conversation (pour transmettre un contexte pertinent)
 CONVERSATION_HISTORY_LIMIT = 4
 
 # Création de l'application FastAPI
 app = FastAPI()
 
 if not OPENAI_API_KEY:
-    raise ValueError("Missing the OpenAI API key. Please set it in the .env file.")
+    raise ValueError("Missing the OpenAI API key. Please set it in the .env file for pam_markII.")
 
 # ---------------------------
 # Endpoint pour les appels entrants
@@ -76,7 +109,6 @@ async def handle_incoming_call(request: Request):
     response.say("You may start talking now.")
     host = request.url.hostname
     domain = SERVER if SERVER else host
-    # Ici, domain doit être sans protocole, par exemple "yourdomain.ngrok.io"
     connect = Connect()
     connect.stream(url=f"wss://{domain}/media-stream")
     response.append(connect)
@@ -113,7 +145,7 @@ async def make_outbound_call(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ---------------------------
-# WebSocket /media-stream : gestion du pipeline audio
+# WebSocket /media-stream
 # ---------------------------
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
@@ -190,11 +222,8 @@ async def initialize_session(openai_ws):
     await openai_ws.send(json.dumps(session_update))
 
 #---------------------------
-# L'interaction conversationnelle via WS
+# Démarrage du serveur
 #---------------------------
-# Pour cet exemple, le pipeline de conversation est géré via OpenAI dans le WS de Realtime.
-# Ici, vous pouvez ajouter ou adapter la logique de conversation selon vos besoins.
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
