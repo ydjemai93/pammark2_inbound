@@ -279,14 +279,20 @@ async def initialize_session(openai_ws):
     session_update = {
         "type": "session.update",
         "session": {
-            "turn_detection": {"type": "server_vad"},
-            "input_audio_format": "g711_ulaw",
-            "output_audio_format": "g711_ulaw",
-            "voice": VOICE,
-            "instructions": SYSTEM_MESSAGE,
-            "modalities": ["text", "audio"],
-            "temperature": 0.8,
-        }
+    "turn_detection": {"type": "server_vad"},
+    "input_audio_format": "g711_ulaw",
+    "output_audio_format": "g711_ulaw",
+    "voice": VOICE,
+    "instructions": SYSTEM_MESSAGE,
+    "modalities": ["text", "audio"],
+    "temperature": 0.7,
+    "frequency_penalty": 0.2,  # Réduit la répétition des phrases
+    "presence_penalty": 0.4,  # Encourage l'IA à introduire des variations dans ses réponses
+    "response_latency_smoothing": "aggressive",  # Rend la voix plus fluide en réduisant les pauses entre les phrases
+    "max_tokens": 150,  # Limite la longueur des réponses pour éviter de trop parler d'un coup
+}
+
+
     }
     print('Sending session update:', json.dumps(session_update))
     await openai_ws.send(json.dumps(session_update))
