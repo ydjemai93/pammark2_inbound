@@ -51,7 +51,7 @@ SYSTEM_MESSAGE = ( """Tu es Pam, une agente téléphonique IA conçue pour prés
 - **Garde un ton dynamique et humain**, comme un vrai conseiller qui met en avant son service avec enthousiasme.
 """
 )
-VOICE = 'sage'
+VOICE = 'alloy'
 LOG_EVENT_TYPES = [
     'error', 'response.content.done', 'rate_limits.updated',
     'response.done', 'input_audio_buffer.committed',
