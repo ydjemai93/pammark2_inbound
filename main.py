@@ -16,11 +16,11 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
 PORT = int(os.getenv('PORT', 5050))
 
 # Validation des credentials
-if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
+if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
     raise ValueError("Variables d'environnement manquantes")
 
 # Configuration OpenAI
@@ -54,7 +54,7 @@ async def initiate_outbound_call(request: Request):
         # Création de l'appel sortant (la logique outbound reste inchangée)
         call = twilio_client.calls.create(
             to=to_number,
-            from_=TWILIO_FROM_NUMBER,
+            from_=TWILIO_PHONE_NUMBER,
             url=f"https://{request.url.hostname}/call-connected"
         )
 
