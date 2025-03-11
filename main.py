@@ -6,27 +6,16 @@ import websockets
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
-from twilio.twiml.voice_response import VoiceResponse, Connect, Say
+from twilio.twiml.voice_response import VoiceResponse, Connect, Say, Stream
 from twilio.rest import Client
 from dotenv import load_dotenv
 
-# Charger les variables d'environnement
 load_dotenv()
 
+# Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
 PORT = int(os.getenv('PORT', 5050))
-
-if not all([OPENAI_API_KEY, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
-    raise ValueError("Variables d'environnement manquantes")
-
-VOICE = 'alloy'
-OPENAI_MODEL = 'gpt-4o-realtime-preview-2024-10-01'
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-SYSTEM_MESSAGE = """Tu es Pam, une agente téléphonique IA conçue pour présenter une démo aux utilisateurs ayant rempli un formulaire sur notre site web. Ton rôle est de donner un aperçu efficace et engageant de tes capacités en quelques phrases, sans réciter mécaniquement une liste de fonctionnalités. Ton objectif est de capter l’attention et de donner envie à ton interlocuteur d’en savoir plus.
+SYSTEM_MESSAGE = ( """Tu es Pam, une agente téléphonique IA conçue pour présenter une démo aux utilisateurs ayant rempli un formulaire sur notre site web. Ton rôle est de donner un aperçu efficace et engageant de tes capacités en quelques phrases, sans réciter mécaniquement une liste de fonctionnalités. Ton objectif est de capter l’attention et de donner envie à ton interlocuteur d’en savoir plus.
 
 ### Instructions
 
@@ -54,68 +43,110 @@ SYSTEM_MESSAGE = """Tu es Pam, une agente téléphonique IA conçue pour présen
 
 5. **Clôture engageante**  
    *"Si cela vous intrigue, on peut essayer une courte mise en situation ! Vous voulez voir comment je réagirais à une demande spécifique ?"*
+
+### Points clés
+- **Ne récite pas une liste de fonctionnalités**, fais une présentation fluide et naturelle.
+- **Encourage l’interaction en posant des questions**, plutôt que de tout expliquer d’un bloc.
+- **Reste concise et percutante**, pour garder l’attention de l’utilisateur.
+- **Garde un ton dynamique et humain**, comme un vrai conseiller qui met en avant son service avec enthousiasme.
 """
+)
+VOICE = 'alloy'
+LOG_EVENT_TYPES = [
+    'error', 'response.content.done', 'rate_limits.updated',
+    'response.done', 'input_audio_buffer.committed',
+    'input_audio_buffer.speech_stopped', 'input_audio_buffer.speech_started',
+    'session.created'
+]
+SHOW_TIMING_MATH = False
 
 app = FastAPI()
 
-@app.get("/", response_class=JSONResponse)
-async def index_page():
-    print("[LOG] Accès à la page d'index")
-    return {"message": "Twilio Media Stream Server is running!"}
+if not OPENAI_API_KEY:
+    raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
 
 # ---------------------------
-# Gestion des appels sortants
+# SECTION APPEL SORTANT (NE PAS MODIFIER)
 # ---------------------------
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER')
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+
+@app.get("/", response_class=JSONResponse)
+async def index_page():
+    return {"message": "Twilio Media Stream Server is running!"}
+
 @app.post("/outbound-call")
 async def initiate_outbound_call(request: Request):
+    """
+    Endpoint pour déclencher un appel sortant.
+    Attend un JSON avec : {"to": "+33612345678"}
+    """
     try:
         data = await request.json()
         to_number = data.get('to')
-        print(f"[LOG] Requête d'appel sortant reçue pour le numéro: {to_number}")
         if not to_number or not to_number.startswith('+'):
-            print("[ERROR] Numéro invalide, format attendu E.164")
-            return JSONResponse({"error": "Numéro invalide, utilisez E.164 (ex: +33123456789)"}, status_code=400)
+            return JSONResponse(
+                {"error": "Format de numéro invalide. Utilisez le format E.164 (ex: +33123456789)"},
+                status_code=400
+            )
         call = twilio_client.calls.create(
             to=to_number,
             from_=TWILIO_FROM_NUMBER,
-            url=f"https://{request.url.hostname}/incoming-call"
+            url=f"https://{request.url.hostname}/call-connected"
         )
-        print(f"[LOG] Appel initié avec SID: {call.sid}")
-        return JSONResponse({"status": "call_initiated", "call_sid": call.sid})
+        return JSONResponse({
+            "status": "call_initiated",
+            "call_sid": call.sid
+        })
     except Exception as e:
-        print(f"[ERREUR] Erreur dans outbound-call: {str(e)}")
         return JSONResponse({"error": f"Erreur Twilio: {str(e)}"}, status_code=500)
 
-# ---------------------------
-# Gestion des appels entrants
-# ---------------------------
-@app.api_route("/incoming-call", methods=["GET", "POST"])
-async def handle_incoming_call(request: Request):
-    print("[LOG] Incoming call received")
+@app.post("/call-connected")
+def handle_call_connection(request: Request):
+    """
+    Génère le TwiML de connexion au WebSocket quand l'appel sortant est décroché.
+    """
     response = VoiceResponse()
-    response.say("Bienvenue, votre appel est en cours de connexion.")
-    response.pause(length=1)
     connect = Connect()
-    stream_url = f"wss://{request.url.hostname}/media-stream"
-    print(f"[LOG] Configuration du stream vers: {stream_url}")
-    connect.stream(url=stream_url)
+    connect.stream(url=f"wss://{request.url.hostname}/media-stream")
     response.append(connect)
-    print("[LOG] Réponse Twilio générée pour l'appel entrant")
     return HTMLResponse(content=str(response), media_type="application/xml")
 
 # ---------------------------
-# WebSocket pour la gestion du flux média
+# NOUVELLE SECTION : APPEL ENTRANT
+# ---------------------------
+@app.api_route("/incoming-call", methods=["GET", "POST"])
+async def handle_incoming_call(request: Request):
+    """
+    Génère le TwiML pour les appels entrants.
+    Ce TwiML inclut un <Connect><Stream> redirigeant vers le WebSocket /media-stream.
+    """
+    response = VoiceResponse()
+    response.say("Bienvenue, vous êtes connecté à notre assistant vocal.")
+    response.pause(length=1)
+    response.say("Vous pouvez commencer à parler.")
+    host = request.url.hostname
+    connect = Connect()
+    connect.stream(url=f"wss://{host}/media-stream")
+    response.append(connect)
+    return HTMLResponse(content=str(response), media_type="application/xml")
+
+# ---------------------------
+# WebSocket pour le flux média (pour les appels entrants et sortants)
 # ---------------------------
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
+    """
+    Gère le flux média entre Twilio et l'API Realtime d'OpenAI.
+    Pipeline: Twilio -> pam_markII -> OpenAI Realtime -> pam_markII -> Twilio
+    """
+    print("Client connected")
     await websocket.accept()
-    print("[LOG] Client connecté via WebSocket (Twilio)")
-    
     try:
-        openai_ws_url = f'wss://api.openai.com/v1/realtime?model={OPENAI_MODEL}'
-        print(f"[LOG] Connexion à OpenAI via WebSocket: {openai_ws_url}")
         async with websockets.connect(
-            openai_ws_url,
+            f'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01',
             extra_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1"
@@ -123,98 +154,148 @@ async def handle_media_stream(websocket: WebSocket):
         ) as openai_ws:
             await initialize_session(openai_ws)
             stream_sid = None
-
+            latest_media_timestamp = 0
+            last_assistant_item = None
+            mark_queue = []
+            response_start_timestamp_twilio = None
+            
             async def receive_from_twilio():
-                nonlocal stream_sid
-                async for message in websocket.iter_text():
-                    print(f"[LOG] Message reçu de Twilio: {message}")
-                    try:
+                nonlocal stream_sid, latest_media_timestamp
+                try:
+                    async for message in websocket.iter_text():
                         data = json.loads(message)
-                    except json.JSONDecodeError as err:
-                        print(f"[ERREUR] Erreur de décodage JSON: {err}")
-                        continue
-
-                    if data.get('event') == 'media' and openai_ws.open:
-                        print("[LOG] Transmission du payload audio vers OpenAI")
-                        await openai_ws.send(json.dumps({
-                            "type": "input_audio_buffer.append",
-                            "audio": data['media']['payload']
-                        }))
-                    elif data.get('event') == 'start':
-                        stream_sid = data['start']['streamSid']
-                        print(f"[LOG] Stream démarré avec Stream SID: {stream_sid}")
-                    else:
-                        print(f"[LOG] Événement non traité: {data.get('event')}")
+                        if data.get('event') == 'media' and openai_ws.open:
+                            latest_media_timestamp = int(data['media']['timestamp'])
+                            audio_append = {
+                                "type": "input_audio_buffer.append",
+                                "audio": data['media']['payload']
+                            }
+                            await openai_ws.send(json.dumps(audio_append))
+                        elif data.get('event') == 'start':
+                            stream_sid = data['start']['streamSid']
+                            print(f"Stream started: {stream_sid}")
+                            response_start_timestamp_twilio = None
+                            latest_media_timestamp = 0
+                            last_assistant_item = None
+                        elif data.get('event') == 'mark':
+                            if mark_queue:
+                                mark_queue.pop(0)
+                except WebSocketDisconnect:
+                    print("Twilio disconnected.")
+                    if openai_ws.open:
+                        await openai_ws.close()
 
             async def send_to_twilio():
-                async for message in openai_ws:
-                    print(f"[LOG] Message reçu d'OpenAI: {message}")
-                    try:
-                        data = json.loads(message)
-                    except json.JSONDecodeError as err:
-                        print(f"[ERREUR] Erreur de décodage JSON depuis OpenAI: {err}")
-                        continue
+                nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
+                try:
+                    async for openai_message in openai_ws:
+                        response_data = json.loads(openai_message)
+                        if response_data.get('type') in LOG_EVENT_TYPES:
+                            print(f"Received event: {response_data.get('type')}", response_data)
+                        if response_data.get('type') == 'response.audio.delta' and 'delta' in response_data:
+                            # Convertir et envoyer l'audio
+                            audio_payload = base64.b64encode(base64.b64decode(response_data['delta'])).decode('utf-8')
+                            audio_delta = {
+                                "event": "media",
+                                "streamSid": stream_sid,
+                                "media": {
+                                    "payload": audio_payload
+                                }
+                            }
+                            await websocket.send_json(audio_delta)
+                            if response_start_timestamp_twilio is None:
+                                response_start_timestamp_twilio = latest_media_timestamp
+                                if SHOW_TIMING_MATH:
+                                    print(f"Setting start timestamp: {response_start_timestamp_twilio}ms")
+                            if response_data.get('item_id'):
+                                last_assistant_item = response_data['item_id']
+                            await send_mark(websocket, stream_sid)
+                        if response_data.get('type') == 'input_audio_buffer.speech_started':
+                            print("User speech started detected.")
+                            if last_assistant_item:
+                                await handle_speech_started_event()
+                except Exception as e:
+                    print(f"Error in send_to_twilio: {e}")
 
-                    if data.get('type') == 'response.audio.delta' and 'delta' in data:
-                        print("[LOG] Envoi de la réponse audio vers Twilio")
-                        await websocket.send_json({
-                            "event": "media",
-                            "streamSid": stream_sid,
-                            "media": {"payload": data['delta']}
-                        })
-                        await add_natural_pauses(openai_ws)
-                    else:
-                        print(f"[LOG] Réponse d'OpenAI non audio ou sans delta: {data.get('type')}")
+            async def handle_speech_started_event():
+                nonlocal response_start_timestamp_twilio, last_assistant_item
+                print("Handling speech interruption.")
+                if mark_queue and response_start_timestamp_twilio is not None:
+                    elapsed_time = latest_media_timestamp - response_start_timestamp_twilio
+                    if SHOW_TIMING_MATH:
+                        print(f"Truncation time: {elapsed_time}ms")
+                    if last_assistant_item:
+                        truncate_event = {
+                            "type": "conversation.item.truncate",
+                            "item_id": last_assistant_item,
+                            "content_index": 0,
+                            "audio_end_ms": elapsed_time
+                        }
+                        await openai_ws.send(json.dumps(truncate_event))
+                    await websocket.send_json({
+                        "event": "clear",
+                        "streamSid": stream_sid
+                    })
+                    mark_queue.clear()
+                    last_assistant_item = None
+                    response_start_timestamp_twilio = None
+
+            async def send_mark(connection, stream_sid):
+                if stream_sid:
+                    mark_event = {
+                        "event": "mark",
+                        "streamSid": stream_sid,
+                        "mark": {"name": "responsePart"}
+                    }
+                    await connection.send_json(mark_event)
+                    mark_queue.append('responsePart')
 
             await asyncio.gather(receive_from_twilio(), send_to_twilio())
-
     except Exception as e:
-        print(f"[ERREUR] Exception dans handle_media_stream: {str(e)}")
+        print(f"Error in media_stream: {e}")
     finally:
-        print("[LOG] Fermeture de la connexion WebSocket Twilio")
         await websocket.close()
 
-# ---------------------------
-# Améliorations pour une conversation plus fluide
-# ---------------------------
-async def add_natural_pauses(openai_ws):
-    """Ajoute une pause naturelle avant la réponse pour un rendu plus humain."""
-    pause_message = {
-        "type": "response.create",
-        "response": {
-            "modalities": ["audio"],
-            "instructions": "Ajoutez une courte pause de 0.5 seconde avant de parler."
+async def send_initial_conversation_item(openai_ws):
+    initial_conversation_item = {
+        "type": "conversation.item.create",
+        "item": {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Greet the user with 'Hello there! I am an AI voice assistant powered by Twilio and the OpenAI Realtime API. You can ask me for facts, jokes, or anything you can imagine. How can I help you?'"
+                }
+            ]
         }
     }
-    print("[LOG] Envoi de l'instruction de pause naturelle à OpenAI")
-    await openai_ws.send(json.dumps(pause_message))
+    await openai_ws.send(json.dumps(initial_conversation_item))
+    await openai_ws.send(json.dumps({"type": "response.create"}))
 
 async def initialize_session(openai_ws):
-    """Initialise la session OpenAI avec des réglages optimisés."""
     session_update = {
         "type": "session.update",
         "session": {
-            "turn_detection": {"type": "server_vad"},
-            "input_audio_format": "g711_ulaw",
-            "output_audio_format": "g711_ulaw",
-            "voice": VOICE,
-            "instructions": SYSTEM_MESSAGE,
-            "modalities": ["text", "audio"],
-            "temperature": 0.7,
-            "frequency_penalty": 0.2,
-            "presence_penalty": 0.4,
-            "response_latency_smoothing": "aggressive",
-            "max_tokens": 150
+            "session": {
+    "turn_detection": {"type": "server_vad"},
+    "input_audio_format": "g711_ulaw",
+    "output_audio_format": "g711_ulaw",
+    "voice": VOICE,
+    "instructions": SYSTEM_MESSAGE,
+    "modalities": ["text", "audio"],
+    "temperature": 0.7,
+    "frequency_penalty": 0.2,  # Réduit la répétition des phrases
+    "presence_penalty": 0.4,  # Encourage l'IA à introduire des variations dans ses réponses
+    "response_latency_smoothing": "aggressive",  # Rend la voix plus fluide en réduisant les pauses entre les phrases
+    "max_tokens": 150,  # Limite la longueur des réponses pour éviter de trop parler d'un coup
+}
+
         }
     }
-    print("[LOG] Envoi de la configuration de session à OpenAI")
-    print(f"[DEBUG] Session update: {json.dumps(session_update)}")
+    print('Sending session update:', json.dumps(session_update))
     await openai_ws.send(json.dumps(session_update))
 
-# ---------------------------
-# Lancement du serveur
-# ---------------------------
 if __name__ == "__main__":
     import uvicorn
-    print(f"[LOG] Démarrage du serveur sur le port {PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
