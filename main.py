@@ -286,8 +286,7 @@ async def initialize_session(openai_ws):
             "instructions": SYSTEM_MESSAGE,
             "modalities": ["text", "audio"],
             "temperature": 0.7,
-            "frequency_penalty": 0.2,  # Réduit la répétition des phrases
-            
+                       
             
         }
     }
