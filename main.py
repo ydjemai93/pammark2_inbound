@@ -287,7 +287,7 @@ async def initialize_session(openai_ws):
             "modalities": ["text", "audio"],
             "temperature": 0.7,
             "frequency_penalty": 0.2,  # Réduit la répétition des phrases
-            "presence_penalty": 0.4,  # Encourage l'IA à introduire des variations dans ses réponses
+            
             
         }
     }
